@@ -554,37 +554,39 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         // 1.校验参数
         ThrowUtils.throwIf(spaceId == null || StrUtil.isBlank(pictureColor), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null, ErrorCode.NO_AUTH_ERROR);
-        // 2.检查是否具有该空间权限
+        // 2. 校验空间权限
         Space space = spaceService.getById(spaceId);
         ThrowUtils.throwIf(space == null, ErrorCode.NOT_FOUND_ERROR, "空间不存在");
         if (!space.getUserId().equals(loginUser.getId())) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "没有权限访问该空间");
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "没有空间访问权限");
         }
-        // 3.查询空间下的所有图片（必须有主色调）
+        // 3. 查询该空间下的所有图片（必须要有主色调）
         List<Picture> pictureList = this.lambdaQuery()
                 .eq(Picture::getSpaceId, spaceId)
                 .isNotNull(Picture::getPicColor)
                 .list();
-        // 如果没有图片，则返回空列表
-        if(CollUtil.isEmpty(pictureList)){
+        // 如果没有图片，直接返回空列表
+        if (CollUtil.isEmpty(pictureList)) {
             return new ArrayList<>();
         }
         // 将颜色字符串转换为主色调
         Color targetColor = Color.decode(pictureColor);
-        // 4.计算相似并排序
+        // 4. 计算相似度并排序
         List<Picture> sortedPictureList = pictureList.stream()
                 .sorted(Comparator.comparingDouble(picture -> {
                     String hexColor = picture.getPicColor();
-                    if(StrUtil.isBlank(hexColor)) {
+                    // 没有主色调的图片会默认排序到最后
+                    if (StrUtil.isBlank(hexColor)) {
                         return Double.MAX_VALUE;
                     }
                     Color picColor = Color.decode(hexColor);
                     // 计算相似度
-                    return  ColorSimilarUtils.calculateSimilarity(targetColor, picColor);
+                    // 越大越相似
+                    return -ColorSimilarUtils.calculateSimilarity(targetColor, picColor);
                 }))
-                .limit(12) // 取前 12 条
+                .limit(12) // 取前 12 个
                 .collect(Collectors.toList());
-        // 5. 组装返回结果
+        // 5. 返回结果
         return sortedPictureList.stream()
                 .map(PictureVO::objToVo)
                 .collect(Collectors.toList());

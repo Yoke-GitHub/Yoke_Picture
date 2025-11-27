@@ -33,8 +33,7 @@ import java.util.stream.Collectors;
  */
 
 @Service
-public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
-        implements SpaceAnalyzeService {
+public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space> implements SpaceAnalyzeService {
 
     @Resource
     private UserService userService;
@@ -48,55 +47,50 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
     @Override
     public SpaceUsageAnalyzeResponse getSpaceUsageAnalyze(SpaceUsageAnalyzeRequest spaceUsageAnalyzeRequest, User loginUser) {
         // 校验参数
-        // 全空间或者公共图库，需要从Picture表 查询
+        // 全空间或公共图库，需要从 Picture 表查询
         if (spaceUsageAnalyzeRequest.isQueryAll() || spaceUsageAnalyzeRequest.isQueryPublic()) {
-            // 校验权限,仅管理员可用
+            // 权限校验，仅管理员可以访问
             checkSpaceAnalyzeAuth(spaceUsageAnalyzeRequest, loginUser);
             // 统计图库的使用空间
             QueryWrapper<Picture> queryWrapper = new QueryWrapper<>();
             queryWrapper.select("picSize");
-
-            // 填充查询条件
+            // 补充查询范围
             fillAnalyzeQueryWrapper(spaceUsageAnalyzeRequest, queryWrapper);
             List<Object> pictureObjList = pictureService.getBaseMapper().selectObjs(queryWrapper);
-            long useSize = pictureObjList.stream().mapToLong(obj -> (Long) obj).sum();
-            long useCount = pictureObjList.size();
+            long usedSize = pictureObjList.stream().mapToLong(obj -> (Long) obj).sum();
+            long usedCount = pictureObjList.size();
             // 封装返回结果
             SpaceUsageAnalyzeResponse spaceUsageAnalyzeResponse = new SpaceUsageAnalyzeResponse();
-            spaceUsageAnalyzeResponse.setUsedSize(useSize);
-            spaceUsageAnalyzeResponse.setUsedCount(useCount);
-            // 公共图库（或全空间） 无数量和容量限制，也没比例
+            spaceUsageAnalyzeResponse.setUsedSize(usedSize);
+            spaceUsageAnalyzeResponse.setUsedCount(usedCount);
+            // 公共图库（或者全部空间）无数量和容量限制、也没有比例
             spaceUsageAnalyzeResponse.setMaxSize(null);
             spaceUsageAnalyzeResponse.setSizeUsageRatio(null);
             spaceUsageAnalyzeResponse.setMaxCount(null);
             spaceUsageAnalyzeResponse.setCountUsageRatio(null);
             return spaceUsageAnalyzeResponse;
-
         } else {
-            // 指定空间直接从Space表查询
+            // 特定空间可以直接从 Space 表查询
             Long spaceId = spaceUsageAnalyzeRequest.getSpaceId();
-            ThrowUtils.throwIf(spaceId == null || spaceId < 0, ErrorCode.PARAMS_ERROR);
+            ThrowUtils.throwIf(spaceId == null || spaceId <= 0, ErrorCode.PARAMS_ERROR);
             // 获取空间信息
             Space space = spaceService.getById(spaceId);
-            ThrowUtils.throwIf(space == null, ErrorCode.NO_AUTH_ERROR, "空间不存在");
-            // 校验权限, 仅本人或管理员可用
-            spaceService.checkSpaceAuth(loginUser, space);
-
+            ThrowUtils.throwIf(space == null, ErrorCode.NOT_FOUND_ERROR, "空间不存在");
+            // 权限校验，仅管理员可以访问
+            checkSpaceAnalyzeAuth(spaceUsageAnalyzeRequest, loginUser);
             // 封装返回结果
             SpaceUsageAnalyzeResponse spaceUsageAnalyzeResponse = new SpaceUsageAnalyzeResponse();
             spaceUsageAnalyzeResponse.setUsedSize(space.getTotalSize());
-            spaceUsageAnalyzeResponse.setMaxSize(space.getMaxSize());
-            // 后端直接算好百分比，这样前端可以直接展示
-            double sizeUsageRatio = NumberUtil.round((space.getTotalSize() * 100.0 / space.getMaxSize()), 2).doubleValue();
-            spaceUsageAnalyzeResponse.setSizeUsageRatio(sizeUsageRatio);
             spaceUsageAnalyzeResponse.setUsedCount(space.getTotalCount());
+            spaceUsageAnalyzeResponse.setMaxSize(space.getMaxSize());
             spaceUsageAnalyzeResponse.setMaxCount(space.getMaxCount());
-            double countUsageRatio = NumberUtil.round((space.getTotalCount() * 100.0 / space.getMaxCount()), 2).doubleValue();
+            // 计算比例
+            double sizeUsageRatio = NumberUtil.round(space.getTotalSize() * 100.0 / space.getMaxSize(), 2).doubleValue();
+            double countUsageRatio = NumberUtil.round(space.getTotalCount() * 100.0 / space.getMaxCount(), 2).doubleValue();
+            spaceUsageAnalyzeResponse.setSizeUsageRatio(sizeUsageRatio);
             spaceUsageAnalyzeResponse.setCountUsageRatio(countUsageRatio);
-
+            return spaceUsageAnalyzeResponse;
         }
-
-        return null;
     }
 
     @Override
@@ -110,19 +104,15 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
         fillAnalyzeQueryWrapper(spaceCategoryAnalyzeRequest, queryWrapper);
 
         // 使用 MyBatis Plus 分组查询
-        queryWrapper.select("category", "count(*) as count", "sum(picSize) as totalSize")
-                .groupBy("category");
+        queryWrapper.select("category", "count(*) as count", "sum(picSize) as totalSize").groupBy("category");
 
         // 查询并转换结果
-        return pictureService.getBaseMapper().selectMaps(queryWrapper)
-                .stream()
-                .map(result -> {
-                    String category = (String) result.get("category");
-                    Long count = (Long) result.get("count");
-                    Long totalSize = (Long) result.get("totalSize");
-                    return new SpaceCategoryAnalyzeResponse(category, count, totalSize);
-                })
-                .collect(Collectors.toList());
+        return pictureService.getBaseMapper().selectMaps(queryWrapper).stream().map(result -> {
+            String category = (String) result.get("category");
+            Long count = ((Number) result.get("count")).longValue();
+            Long totalSize = ((Number) result.get("totalSize")).longValue();
+            return new SpaceCategoryAnalyzeResponse(category, count, totalSize);
+        }).collect(Collectors.toList());
     }
 
     @Override
@@ -138,23 +128,16 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
 
         // 查询所有符合条件的标签
         queryWrapper.select("tags");
-        List<String> tagsJsonList = pictureService.getBaseMapper().selectObjs(queryWrapper)
-                .stream()
-                .filter(ObjUtil::isNotNull)
-                .map(Object::toString)
-                .collect(Collectors.toList());
+        List<String> tagsJsonList = pictureService.getBaseMapper().selectObjs(queryWrapper).stream().filter(ObjUtil::isNotNull).map(Object::toString).collect(Collectors.toList());
 
         // 合并所有标签并统计使用次数
         Map<String, Long> tagCountMap = tagsJsonList.stream()
                 // ["java","python"],["java","php"] -> "java","python","java","php"
-                .flatMap(tagsJson -> JSONUtil.toList(tagsJson, String.class).stream())
-                .collect(Collectors.groupingBy(tag -> tag, Collectors.counting()));
+                .flatMap(tagsJson -> JSONUtil.toList(tagsJson, String.class).stream()).collect(Collectors.groupingBy(tag -> tag, Collectors.counting()));
 
         // 转换为响应对象，按使用次数降序排序
-        return tagCountMap.entrySet().stream()
-                .sorted((e1, e2) -> Long.compare(e2.getValue(), e1.getValue())) // 降序排列
-                .map(entry -> new SpaceTagAnalyzeResponse(entry.getKey(), entry.getValue()))
-                .collect(Collectors.toList());
+        return tagCountMap.entrySet().stream().sorted((e1, e2) -> Long.compare(e2.getValue(), e1.getValue())) // 降序排列
+                .map(entry -> new SpaceTagAnalyzeResponse(entry.getKey(), entry.getValue())).collect(Collectors.toList());
     }
 
     @Override
@@ -170,10 +153,7 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
 
         // 查询所有符合条件的图片大小
         queryWrapper.select("picSize");
-        List<Long> picSizes = pictureService.getBaseMapper().selectObjs(queryWrapper)
-                .stream()
-                .map(size -> ((Number) size).longValue())
-                .collect(Collectors.toList());
+        List<Long> picSizes = pictureService.getBaseMapper().selectObjs(queryWrapper).stream().map(size -> ((Number) size).longValue()).collect(Collectors.toList());
 
         // 定义分段范围，注意使用有序 Map
         Map<String, Long> sizeRanges = new LinkedHashMap<>();
@@ -183,9 +163,7 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
         sizeRanges.put(">1MB", picSizes.stream().filter(size -> size >= 1 * 1024 * 1024).count());
 
         // 转换为响应对象
-        return sizeRanges.entrySet().stream()
-                .map(entry -> new SpaceSizeAnalyzeResponse(entry.getKey(), entry.getValue()))
-                .collect(Collectors.toList());
+        return sizeRanges.entrySet().stream().map(entry -> new SpaceSizeAnalyzeResponse(entry.getKey(), entry.getValue())).collect(Collectors.toList());
     }
 
     @Override
@@ -221,13 +199,11 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
 
         // 查询结果并转换
         List<Map<String, Object>> queryResult = pictureService.getBaseMapper().selectMaps(queryWrapper);
-        return queryResult.stream()
-                .map(result -> {
-                    String period = result.get("period").toString();
-                    Long count = ((Number) result.get("count")).longValue();
-                    return new SpaceUserAnalyzeResponse(period, count);
-                })
-                .collect(Collectors.toList());
+        return queryResult.stream().map(result -> {
+            String period = result.get("period").toString();
+            Long count = ((Number) result.get("count")).longValue();
+            return new SpaceUserAnalyzeResponse(period, count);
+        }).collect(Collectors.toList());
     }
 
     @Override
@@ -239,9 +215,7 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
 
         // 构造查询条件
         QueryWrapper<Space> queryWrapper = new QueryWrapper<>();
-        queryWrapper.select("id", "spaceName", "userId", "totalSize")
-                .orderByDesc("totalSize")
-                .last("LIMIT " + spaceRankAnalyzeRequest.getTopN()); // 取前 N 名
+        queryWrapper.select("id", "spaceName", "userId", "totalSize").orderByDesc("totalSize").last("LIMIT " + spaceRankAnalyzeRequest.getTopN()); // 取前 N 名
 
         // 查询结果
         return spaceService.list(queryWrapper);
@@ -285,13 +259,13 @@ public class SpaceAnalyzeServiceImpl extends ServiceImpl<SpaceMapper, Space>
         // 公共图库
         boolean queryPublic = spaceAnalyzeRequest.isQueryPublic();
         if (queryPublic) {
-            queryWrapper.isNull("space_id");
+            queryWrapper.isNull("spaceId");
             return;
         }
         Long spaceId = spaceAnalyzeRequest.getSpaceId();
         // 指定空间
         if (spaceId != null) {
-            queryWrapper.eq("space_id", spaceId);
+            queryWrapper.eq("spaceId", spaceId);
             return;
         }
         throw new BusinessException(ErrorCode.PARAMS_ERROR, "未指定查询范围");
